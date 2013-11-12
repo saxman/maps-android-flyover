@@ -52,8 +52,11 @@ public class MainActivity extends FragmentActivity {
     private static final int POLYLINE_ALPHA = 128; // 0-255
     private static final float POLYLINE_WIDTH = 8;
 
-    private static final float CAMERA_FLYOVER_ZOOM = 18;
-    private static final float CAMERA_FLYOVER_TILT = 60;
+    private static final float CAMERA_ZOOM = 16;
+    private static final float CAMERA_OBLIQUE_ZOOM = 18;
+    private static final float CAMERA_OBLIQUE_TILT = 60;
+
+    private static final long CAMERA_HEADING_CHANGE_RATE = 5;
 
     private static final LatLng[] ROUTE = {
             new LatLng(37.783986, -122.408059),
@@ -64,7 +67,9 @@ public class MainActivity extends FragmentActivity {
 
     private GoogleMap mMap;
     private Marker mMarker;
-    
+    private AnimatorSet mAnimatorSet;
+    private Menu mMenu;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -85,9 +90,9 @@ public class MainActivity extends FragmentActivity {
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        // Inflate the menu items for use in the action bar
         MenuInflater inflater = getMenuInflater();
         inflater.inflate(R.menu.main_activity_actions, menu);
+        mMenu = menu; // Keep the menu for later use (swapping icons).
         return super.onCreateOptionsMenu(menu);
     }
 
@@ -96,15 +101,39 @@ public class MainActivity extends FragmentActivity {
         if (mMap == null) {
             return true;
         }
-        
-        // TODO: Create an animation play/pause action.
-        // TODO: Create a zoom action, to allow the user to switch between street-level and neighborhood.
+
         switch (item.getItemId()) {
             case R.id.action_marker:
                 mMarker.setVisible(!mMarker.isVisible());
                 return true;
             case R.id.action_buildings:
                 mMap.setBuildingsEnabled(!mMap.isBuildingsEnabled());
+                return true;
+            case R.id.action_animation:
+                if (mAnimatorSet.isRunning()) {
+                    mAnimatorSet.cancel();
+                } else {
+                    mAnimatorSet.start();
+                }
+                return true;
+            case R.id.action_perspective:
+                CameraPosition currentPosition = mMap.getCameraPosition();
+                CameraPosition newPosition;
+                if (currentPosition.zoom == CAMERA_OBLIQUE_ZOOM
+                        && currentPosition.tilt == CAMERA_OBLIQUE_TILT) {
+                    newPosition = new CameraPosition.Builder()
+                            .tilt(0).zoom(CAMERA_ZOOM)
+                            .bearing(currentPosition.bearing)
+                            .target(currentPosition.target).build();
+                } else {
+                    newPosition = new CameraPosition.Builder()
+                            .tilt(CAMERA_OBLIQUE_TILT)
+                            .zoom(CAMERA_OBLIQUE_ZOOM)
+                            .bearing(currentPosition.bearing)
+                            .target(currentPosition.target).build();
+                }
+                mMap.moveCamera(CameraUpdateFactory.newCameraPosition(newPosition));
+
                 return true;
             default:
                 return super.onOptionsItemSelected(item);
@@ -113,6 +142,11 @@ public class MainActivity extends FragmentActivity {
 
     private void setUpMap() {
         mMap.setIndoorEnabled(false);
+
+        // Disable gestures & controls since ideal results (pause Animator) is
+        // not easy to show in a simplified example.
+        mMap.getUiSettings().setAllGesturesEnabled(false);
+        mMap.getUiSettings().setZoomControlsEnabled(false);
 
         // Create a marker to represent the user on the route.
         mMarker = mMap.addMarker(new MarkerOptions()
@@ -133,7 +167,8 @@ public class MainActivity extends FragmentActivity {
         mMap.setOnMapLoadedCallback(new GoogleMap.OnMapLoadedCallback() {
             @Override
             public void onMapLoaded() {
-                // Once the camera has moved to the beginning of the route, start the animation.
+                // Once the camera has moved to the beginning of the route,
+                // start the animation.
                 mMap.setOnCameraChangeListener(new GoogleMap.OnCameraChangeListener() {
                     @Override
                     public void onCameraChange(CameraPosition position) {
@@ -147,8 +182,8 @@ public class MainActivity extends FragmentActivity {
 
                 CameraPosition pos = new CameraPosition.Builder()
                         .target(ROUTE[0])
-                        .zoom(CAMERA_FLYOVER_ZOOM)
-                        .tilt(CAMERA_FLYOVER_TILT)
+                        .zoom(CAMERA_OBLIQUE_ZOOM)
+                        .tilt(CAMERA_OBLIQUE_TILT)
                         .bearing(bearing)
                         .build();
 
@@ -156,23 +191,15 @@ public class MainActivity extends FragmentActivity {
             }
         });
 
-        mMap.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
-            @Override
-            public void onMapClick(LatLng point) {
-                // TODO: cancel animation?
-            }
-        });
-
         // Move the camera over the start position.
         CameraPosition pos = new CameraPosition.Builder()
                 .target(ROUTE[0])
-                .zoom(CAMERA_FLYOVER_ZOOM - 2)
+                .zoom(CAMERA_OBLIQUE_ZOOM - 2)
                 .build();
 
         mMap.moveCamera(CameraUpdateFactory.newCameraPosition(pos));
     }
 
-    @TargetApi(Build.VERSION_CODES.HONEYCOMB)
     public void animateRoute() {
         LinkedList<Animator> animators = new LinkedList<Animator>();
 
@@ -205,7 +232,7 @@ public class MainActivity extends FragmentActivity {
             // Use the change in degrees of the heading for the animation
             // duration.
             long d = Math.round(Math.abs(h1 - h2));
-            va.setDuration(d * 5);
+            va.setDuration(d * CAMERA_HEADING_CHANGE_RATE);
             animators.add(va);
 
             ObjectAnimator oa = ObjectAnimator.ofObject(mMarker, "position",
@@ -227,9 +254,30 @@ public class MainActivity extends FragmentActivity {
             animators.add(oa);
         }
 
-        AnimatorSet as = new AnimatorSet();
-        as.playSequentially(animators);
-        as.start();
+        mAnimatorSet = new AnimatorSet();
+        mAnimatorSet.playSequentially(animators);
+        mAnimatorSet.start();
+
+        mAnimatorSet.addListener(new Animator.AnimatorListener() {
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                mMenu.findItem(R.id.action_animation).setIcon(R.drawable.ic_action_replay);
+            }
+
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                mMenu.findItem(R.id.action_animation).setIcon(R.drawable.ic_action_replay);
+            }
+
+            @Override
+            public void onAnimationRepeat(Animator animation) {
+            }
+
+            @Override
+            public void onAnimationStart(Animator animation) {
+                mMenu.findItem(R.id.action_animation).setIcon(R.drawable.ic_action_stop);
+            }
+        });
     }
 
     class LatLngEvaluator implements TypeEvaluator<LatLng> {
